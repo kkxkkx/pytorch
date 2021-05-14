@@ -9,6 +9,39 @@ from utils import to_var, SOS_ID, UNK_ID, EOS_ID
 import math
 
 
+class Attn(nn.Module):
+    def __init__(self, method, hidden_size, use_cuda=False):
+        super().__init__()
+        self.method = method
+        self.hidden_size = hidden_size
+        self.use_cuda = use_cuda
+
+        if self.method == 'general':
+            self.attn = nn.Linear(self.hidden_size, hidden_size)
+        elif self.method == 'concat':
+            self.attn = nn.Linear(self.hidden_size * 2, hidden_size)
+            self.v = nn.Parameter(torch.FloatTensor(1, hidden_size))
+
+    def forward(self, hidden, encoder_outputs):
+        """
+        hidden : 1, batch_size, hidden_size
+        encoder_outputs : max input length, batch_size, hidden_size
+        """
+        # max_len = encoder_outputs.size(0)
+        # this_batch_size = encoder_outputs.size(1)
+
+        attn_energies = torch.bmm(self.attn(hidden).transpose(1, 0), encoder_outputs.permute(1, 2, 0))
+
+        # Batch size, 1, max input length
+        return F.softmax(attn_energies)
+
+    def score(self, hidden, encoder_output):
+
+        if self.method == 'general':
+            energy = self.attn(encoder_output).view(-1)
+            energy = hidden.view(-1).dot(energy)
+            return energy
+
 class BaseRNNDecoder(nn.Module):
     def __init__(self):
         """Base Decoder Class"""
@@ -208,6 +241,137 @@ class BaseRNNDecoder(nn.Module):
 
         return prediction, final_score, length
 
+class AttnDecoderRNN(BaseRNNDecoder):
+    def __init__(self, score_function,vocab_size, embedding_size,
+                 hidden_size, rnncell=StackedGRUCell, num_layers=1,
+                 dropout=0.0, word_drop=0.0,
+                 max_unroll=30, sample=True, temperature=1.0, beam_size=1):
+        super(AttnDecoderRNN, self).__init__()
+
+        self.score_function=score_function
+        self.vocab_size = vocab_size
+        self.embedding_size = embedding_size
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.dropout = dropout
+        self.temperature = temperature
+        self.word_drop = word_drop
+        self.max_unroll = max_unroll
+        self.sample = sample
+        self.beam_size = beam_size
+
+        self.embedding = nn.Embedding(vocab_size, embedding_size)
+
+        self.rnncell = rnncell(num_layers,
+                               embedding_size,
+                               hidden_size,
+                               dropout)
+        self.concat = nn.Linear(self.hidden_size * 2, self.hidden_size)
+        #vocab_size就是output_size
+        self.out = nn.Linear(hidden_size, vocab_size)
+        self.softmax = nn.Softmax(dim=1)
+        # Choose attention models
+        if score_function != 'none':
+            self.attn = Attn(score_function, hidden_size)
+
+    def forward_step(self, x, h,
+                     encoder_outputs=None,
+                     input_valid_length=None):
+        """
+        Single RNN Step
+        1. Input Embedding (vocab_size => hidden_size)
+        2. RNN Step (hidden_size => hidden_size)
+        3. Output Projection (hidden_size => vocab size)
+
+        Args:
+            x: [batch_size]
+            h: [num_layers, batch_size, hidden_size] (h and c from all layers)
+
+        Return:
+            out: [batch_size,vocab_size] (Unnormalized word distribution)
+            h: [num_layers, batch_size, hidden_size] (h and c from all layers)
+        """
+        # x: [batch_size] => [batch_size, hidden_size]
+        x = self.embed(x)
+
+        # last_h: [batch_size, hidden_size] (h from Top RNN layer)
+        # h: [num_layers, batch_size, hidden_size] (h and c from all layers)
+        last_h, h = self.rnncell(x, h)
+
+        if self.use_lstm:
+            # last_h_c: [2, batch_size, hidden_size] (h from Top RNN layer)
+            # h_c: [2, num_layers, batch_size, hidden_size] (h and c from all layers)
+            last_h = last_h[0]
+
+        # Unormalized word distribution
+        # out: [batch_size, vocab_size]
+        attn_weight = self.attn(last_h, encoder_outputs)
+        context=attn_weight.bmm(encoder_outputs.transpose(0,1))
+        last_h = last_h.squeeze(0)
+        context=context.squeeze(1)
+        concat_input = torch.cat((last_h, context), 1)
+        concat_output = F.tanh(self.concat(concat_input))
+        out = self.out(concat_output)
+        return out, h,attn_weight
+
+    def forward(self, inputs, init_h=None, encoder_outputs=None, input_valid_length=None,
+                decode=False):
+        """
+        Train (decode=False)
+            Args:
+                inputs (Variable, LongTensor): [batch_size, seq_len]
+                init_h: (Variable, FloatTensor): [num_layers, batch_size, hidden_size]
+            Return:
+                out   : [batch_size, seq_len, vocab_size]
+        Test (decode=True)
+            Args:
+                inputs: None
+                init_h: (Variable, FloatTensor): [num_layers, batch_size, hidden_size]
+            Return:
+                out   : [batch_size, seq_len]
+        """
+        batch_size = self.batch_size(inputs, init_h)
+
+        # x: [batch_size]
+        x = self.init_token(batch_size, SOS_ID)
+
+        # h: [num_layers, batch_size, hidden_size]
+        h = self.init_h(batch_size, hidden=init_h)
+
+
+        if not decode:
+            out_list = []
+            seq_len = inputs.size(1)
+            for i in range(seq_len):
+
+                # x: [batch_size]
+                # =>
+                # 输出out: [batch_size, vocab_size]
+                # 隐藏h: [num_layers, batch_size, hidden_size] (h and c from all layers)
+                out, h,attn_weights = self.forward_step(x, h)
+
+                out_list.append(out)
+                x = inputs[:, i]
+
+            # [batch_size, max_target_len, vocab_size]
+            return torch.stack(out_list, dim=1)
+        else:
+            x_list = []
+            for i in range(self.max_unroll):
+
+                # x: [batch_size]
+                # =>
+                # out: [batch_size, vocab_size]
+                # h: [num_layers, batch_size, hidden_size] (h and c from all layers)
+                out, h = self.forward_step(x, h)
+
+                # out: [batch_size, vocab_size]
+                # => x: [batch_size]
+                x = self.decode(out)
+                x_list.append(x)
+
+            # [batch_size, max_target_len]
+            return torch.stack(x_list, dim=1)
 
 class DecoderRNN(BaseRNNDecoder):
     def __init__(self, vocab_size, embedding_size,

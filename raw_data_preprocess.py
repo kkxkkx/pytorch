@@ -67,7 +67,7 @@ def do_preprocess(dir, sess_turn):
     dev_items = list()
 
     for file, item_list in [('data_train.txt', train_items), ('data_dev.txt', dev_items)]:
-        with open(dir+file) as f:
+        with open(dir+file,encoding='utf-8') as f:
             lines = f.readlines()
 
         data_list = list()
@@ -182,8 +182,8 @@ def do_preprocess(dir, sess_turn):
 
 
 def gen_train_dev_set(dir, train_items, dev_items):
-    f_train_out = open(dir + 'train' + '.txt', 'w')
-    f_dev_out = open(dir + 'dev' + '.txt', 'w')
+    f_train_out = open(dir + 'train' + '.txt', 'w',encoding='utf-8')
+    f_dev_out = open(dir + 'dev' + '.txt', 'w',encoding='utf-8')
 
     for type in ['train', 'dev']:
         if type == 'train':

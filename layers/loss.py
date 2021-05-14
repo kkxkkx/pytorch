@@ -1,10 +1,24 @@
 import torch
+from nltk import Variable
 from torch.nn import functional as F
 import torch.nn as nn
-from utils import to_var, sequence_mask
+# from utils import to_var, sequence_mask
 
 
 # https://gist.github.com/jihunchoi/f1434a77df9db1bb337417854b398df1
+def _sequence_mask(sequence_length, max_len=None):
+    if max_len is None:
+        max_len = sequence_length.data.max()
+    batch_size = sequence_length.size(0)
+    seq_range = torch.range(0, max_len - 1).long()
+    seq_range_expand = seq_range.unsqueeze(0).expand(batch_size, max_len)
+    seq_range_expand = Variable(seq_range_expand)
+    if sequence_length.is_cuda:
+        seq_range_expand = seq_range_expand.cuda()
+    seq_length_expand = (sequence_length.unsqueeze(1)
+                         .expand_as(seq_range_expand))
+    return seq_range_expand < seq_length_expand
+
 def masked_cross_entropy(logits, target, length, per_example=False):
     """
     Args:
@@ -37,7 +51,7 @@ def masked_cross_entropy(logits, target, length, per_example=False):
     losses = losses_flat.view(batch_size, max_len)
 
     # [batch_size, max_len]
-    mask = sequence_mask(sequence_length=length, max_len=max_len)
+    mask = _sequence_mask(sequence_length=length, max_len=max_len)
 
     # Apply masking on loss
     losses = losses * mask.float()

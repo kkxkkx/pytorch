@@ -16,6 +16,7 @@ rnncell_dict = {'lstm': StackedLSTMCell, 'gru': StackedGRUCell}
 save_dir = project_dir.joinpath('./ckpt/')
 pred_dir = project_dir.joinpath('./pred/')
 
+
 def str2bool(v):
     """string to boolean"""
     if v.lower() in ('yes', 'true', 't', 'y', '1'):
@@ -60,7 +61,7 @@ class Config(object):
 
         # Save path
         if self.mode == 'train' and self.checkpoint is None:
-            time_now = datetime.now().strftime('%Y-%m-%d_%H:%M:%S')
+            time_now = datetime.now().strftime('%Y-%m-%d_%H_%M_%S')
             self.save_path = save_dir.joinpath(self.data, self.model, time_now)
             self.logdir = self.save_path
             os.makedirs(self.save_path, exist_ok=True)
@@ -146,6 +147,10 @@ def get_config(parse=True, **optional_kwargs):
 
     # Data
     parser.add_argument('--data', type=str, default='./data/')
+
+    # Attentuin
+    parser.add_argument("--score_function", default="general")
+    parser.add_argument('--model', type=str, default='general')
 
     # Parse arguments
     if parse:

@@ -1,4 +1,6 @@
 import torch
+
+import utils
 from utils import EOS_ID
 
 
@@ -83,7 +85,7 @@ class Beam(object):
 
             # Indices of ended sequences
             # [< batch x beam]
-            eos_indices = self.token_ids[t].data.eq(EOS_ID).nonzero()
+            eos_indices = self.token_ids[t].data.eq(utils.EOS_ID).nonzero()
 
             # For each batch, every time we see an EOS in the backtracking process,
             # If not all sequences are ended

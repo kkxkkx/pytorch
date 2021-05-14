@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 from utils import to_var, pad, normal_kl_div, normal_logpdf, bag_of_words_loss, to_bow, EOS_ID
 import layers
-import torch.nn.functional as F
 import numpy as np
 import random
 
@@ -26,14 +25,13 @@ class MHRED(nn.Module):
 
         self.image_encoder = layers.ImageEncoder(context_input_size)
 
-        #上下文编码器，第二层编码器
-        self.context_encoder = layers.ContextRNN(context_input_size * 2,
+        self.context_encoder = layers.ContextRNN(context_input_size*2,
                                                  config.context_size,
                                                  config.rnn,
                                                  config.num_layers,
                                                  config.dropout)
-        self.decoder = layers.AttnDecoderRNN(config.score_function,
-                                         config.vocab_size,
+
+        self.decoder = layers.DecoderRNN(config.vocab_size,
                                          config.embedding_size,
                                          config.decoder_hidden_size,
                                          config.rnncell,
@@ -45,27 +43,10 @@ class MHRED(nn.Module):
                                          config.temperature,
                                          config.beam_size)
 
-        # self.decoder = layers.DecoderRNN(config.vocab_size,
-        #                                  config.embedding_size,
-        #                                  config.decoder_hidden_size,
-        #                                  config.rnncell,
-        #                                  config.num_layers,
-        #                                  config.dropout,
-        #                                  config.word_drop,
-        #                                  config.max_unroll,
-        #                                  config.sample,
-        #                                  config.temperature,
-        #                                  config.beam_size)
-        #解码上下文
         self.context2decoder = layers.FeedForward(config.context_size,
                                                   config.num_layers * config.decoder_hidden_size,
                                                   num_layers=1,
                                                   activation=config.activation)
-        # if self.method == 'general':
-        #     self.attn = nn.Linear(self.config.encoder_hidden_size, self.config.encoder_hidden_size)
-        # elif self.method == 'concat':
-        #     self.attn = nn.Linear(self.config.encoder_hidden_size * 2,self.config.encoder_hidden_size)
-        #     self.v = nn.Parameter(torch.FloatTensor(1, self.config.encoder_hidden_size))
 
         if config.tie_embedding:
             self.decoder.embedding = self.encoder.embedding
@@ -105,6 +86,7 @@ class MHRED(nn.Module):
         img_encoder_outputs = self.image_encoder(input_images)
         img_encoder_outputs = img_encoder_outputs.view(batch_size, max_len, -1)
 
+
         # encoder_hidden: [num_sentences, num_layers * direction * hidden_size]
         encoder_hidden = encoder_hidden.transpose(1, 0).contiguous().view(num_sentences, -1)
 
@@ -122,6 +104,7 @@ class MHRED(nn.Module):
         # context_outputs: [batch_size, max_len, context_size]
         context_outputs, context_last_hidden = self.context_encoder(comb_encoder_hidden,
                                                                     input_conversation_length)
+
         # flatten outputs
         # context_outputs: [num_sentences, context_size]
         context_outputs = torch.cat([context_outputs[i, :l, :]
@@ -172,8 +155,9 @@ class MHRED(nn.Module):
         input_images = input_images.view(-1, 3, 224, 224)
         input_images_length = input_images_length.index_select(1, indices)
 
+
         # Run for context
-        context_hidden = None
+        context_hidden=None
         for i in range(n_context):
             # encoder_outputs: [batch_size, seq_len, hidden_size * direction]
             # encoder_hidden: [num_layers * direction, batch_size, hidden_size]
